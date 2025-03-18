@@ -1,12 +1,11 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
-	"strings"
+
+	"github.com/remcous/bootdev_http/internal/request"
 )
 
 const port = ":42069"
@@ -27,47 +26,13 @@ func main() {
 		}
 		fmt.Println("Accepted connection from", conn.RemoteAddr())
 
-		lineChan := getLinesChannel(conn)
-
-		for line := range lineChan {
-			fmt.Println(line)
+		req, err := request.RequestFromReader(conn)
+		if err != nil {
+			fmt.Printf("error: %v\n", err)
 		}
+
+		fmt.Printf("Request line:\n- Method: %s\n- Target: %s\n- Version: %s\n", req.RequestLine.Method, req.RequestLine.RequestTarget, req.RequestLine.HttpVersion)
+
 		fmt.Println("Connection to ", conn.RemoteAddr(), "closed")
 	}
-}
-
-func getLinesChannel(f io.ReadCloser) <-chan string {
-	lineChan := make(chan string)
-
-	go func() {
-		defer close(lineChan)
-		defer f.Close()
-
-		var currentLine string
-
-		for {
-			buf := make([]byte, 8, 8)
-			n, err := f.Read(buf)
-			if err != nil {
-				if currentLine != "" {
-					lineChan <- currentLine + string(buf[:n])
-				}
-				if errors.Is(err, io.EOF) {
-					break
-				}
-				fmt.Printf("error: %v\n", err)
-				break
-			}
-			str := string(buf[:n])
-
-			parts := strings.Split(str, "\n")
-			for i := range len(parts) - 1 {
-				lineChan <- currentLine + parts[i]
-				currentLine = ""
-			}
-			currentLine += parts[len(parts)-1]
-		}
-	}()
-
-	return lineChan
 }
