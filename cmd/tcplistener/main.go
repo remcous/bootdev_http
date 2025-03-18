@@ -28,14 +28,19 @@ func main() {
 
 		req, err := request.RequestFromReader(conn)
 		if err != nil {
-			fmt.Printf("error: %v\n", err)
+			log.Fatalf("error parsing request: %s\n", err.Error())
 		}
 
-		fmt.Printf("Request line:\n- Method: %s\n- Target: %s\n- Version: %s\n", req.RequestLine.Method, req.RequestLine.RequestTarget, req.RequestLine.HttpVersion)
+		fmt.Println("Request line:")
+		fmt.Printf("- Method: %s\n", req.RequestLine.Method)
+		fmt.Printf("- Target: %s\n", req.RequestLine.RequestTarget)
+		fmt.Printf("- Version: %s\n", req.RequestLine.HttpVersion)
 		fmt.Println("Headers:")
-		for k, v := range req.Headers {
-			fmt.Printf("- %s: %s\n", k, v)
+		for key, value := range req.Headers {
+			fmt.Printf("- %s: %s\n", key, value)
 		}
+		fmt.Println("Body:")
+		fmt.Println(string(req.Body))
 
 		fmt.Println("Connection to ", conn.RemoteAddr(), "closed")
 	}
