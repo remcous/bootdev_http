@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/remcous/bootdev_http/internal/headers"
 )
 
 type Request struct {
 	RequestLine RequestLine
-	state       requestState
+	Headers     headers.Headers
+
+	state requestState
 }
 
 type RequestLine struct {
@@ -24,6 +28,7 @@ type requestState int
 const (
 	requestStateInitialized requestState = iota
 	requestStateDone
+	requestStateParsingHeaders
 )
 
 const crlf = "\r\n"
@@ -39,7 +44,10 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	buf := make([]byte, bufferSize, bufferSize)
 	readToIndex := 0
 
-	req := &Request{state: requestStateInitialized}
+	req := &Request{
+		state:   requestStateInitialized,
+		Headers: headers.NewHeaders(),
+	}
 
 	for req.state != requestStateDone {
 		if readToIndex >= len(buf) {
@@ -51,7 +59,9 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 		numBytesRead, err := reader.Read(buf[readToIndex:])
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				req.state = requestStateDone
+				if req.state != requestStateDone {
+					return nil, fmt.Errorf("incomplete request, in state: %d, read n bytes on EOF: %d", req.state, numBytesRead)
+				}
 				break
 			}
 			return nil, err
@@ -144,6 +154,21 @@ returns:
 int - number of bytes successfully parsed into the request struct
 */
 func (r *Request) parse(data []byte) (int, error) {
+	totalBytesParsed := 0
+	for r.state != requestStateDone {
+		n, err := r.parseSingle(data[totalBytesParsed:])
+		if err != nil {
+			return 0, err
+		}
+		totalBytesParsed += n
+		if n == 0 {
+			break
+		}
+	}
+	return totalBytesParsed, nil
+}
+
+func (r *Request) parseSingle(data []byte) (int, error) {
 	switch r.state {
 	case requestStateInitialized:
 		requestLine, n, err := parseRequestLine(data)
@@ -158,7 +183,19 @@ func (r *Request) parse(data []byte) (int, error) {
 		}
 
 		r.RequestLine = *requestLine
-		r.state = requestStateDone
+		r.state = requestStateParsingHeaders
+
+		return n, nil
+	case requestStateParsingHeaders:
+		n, done, err := r.Headers.Parse(data)
+		if err != nil {
+			// Something actually went wrong
+			return 0, err
+		}
+
+		if done {
+			r.state = requestStateDone
+		}
 
 		return n, nil
 	case requestStateDone:
