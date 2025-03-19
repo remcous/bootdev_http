@@ -1,9 +1,14 @@
 package main
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/remcous/bootdev_http/internal/request"
@@ -28,6 +33,10 @@ func main() {
 }
 
 func handler(w *response.Writer, req *request.Request) {
+	if strings.HasPrefix(req.RequestLine.RequestTarget, "/httpbin") {
+		proxyHandler(w, req)
+		return
+	}
 	if req.RequestLine.RequestTarget == "/yourproblem" {
 		handler400(w, req)
 		return
@@ -95,4 +104,58 @@ func handler200(w *response.Writer, _ *request.Request) {
 	w.WriteHeaders(h)
 	w.WriteBody(body)
 	return
+}
+
+func proxyHandler(w *response.Writer, req *request.Request) {
+	target := strings.TrimPrefix(req.RequestLine.RequestTarget, "/httpbin")
+	url := fmt.Sprintf("https://httpbin.org%s", target)
+	fmt.Println("Proxying to", url)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		handler500(w, req)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.WriteStatusLine(response.StatusOK)
+	h := response.GetDefaultHeaders(0)
+	h.Remove("Content-Length")
+	h.Set("Transfer-Encoding", "chunked")
+	h.Set("Trailer", "X-Content-SHA256")
+	h.Set("Trailer", "X-Content-Length")
+	w.WriteHeaders(h)
+
+	const maxChunkSize = 1024
+	buffer := make([]byte, maxChunkSize)
+	fullBody := []byte{}
+
+	for {
+		n, err := resp.Body.Read(buffer)
+		fullBody = append(fullBody, buffer[:n]...)
+		fmt.Println("Read", n, "bytes")
+		if n > 0 {
+			_, err = w.WriteChunkedBody(buffer[:n])
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Println("Error reading response body:", err)
+			break
+		}
+	}
+
+	h.Set("X-Content-SHA256", fmt.Sprintf("%x", sha256.Sum256(fullBody)))
+	h.Set("X-Content-Length", fmt.Sprintf("%d", len(fullBody)))
+
+	_, err = w.WriteChunkedBodyDone()
+	if err != nil {
+		fmt.Println("Error writing chunked body done:", err)
+	}
+
+	err = w.WriteTrailers(h)
+	if err != nil {
+		fmt.Println("Error writing trailers:", err)
+	}
 }
